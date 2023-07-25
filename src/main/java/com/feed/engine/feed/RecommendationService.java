@@ -1,30 +1,27 @@
 package com.feed.engine.feed;
 
-import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.elasticsearch.action.get.GetRequest;
-import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
-import co.elastic.clients.json.jackson.JacksonJsonpMapper;
-import co.elastic.clients.transport.ElasticsearchTransport;
-import co.elastic.clients.transport.rest_client.RestClientTransport;
 import com.feed.engine.userprofile.*;
 import com.feed.engine.utils.Constants;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.http.HttpHost;
 import org.elasticsearch.client.RequestOptions;
-import org.elasticsearch.client.RestClient;
 import org.elasticsearch.client.RestHighLevelClient;
 import org.elasticsearch.index.query.QueryBuilders;
 import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.SearchHits;
 import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.search.sort.SortBuilders;
+import org.elasticsearch.search.sort.SortMode;
+import org.elasticsearch.search.sort.SortOrder;
 import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
-import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 
@@ -42,6 +39,8 @@ public class RecommendationService {
 
     private final ObjectMapper objectMapper;
 
+
+
     private final ElasticsearchOperations elasticsearchOperations;
 
     public RecommendedUsers getRecommendationForUser(String userId) {
@@ -49,11 +48,52 @@ public class RecommendationService {
     }
 
 
-    public RecommendedUsers getRecommendationForUserUsingShards(String userId) throws IOException {
+    public RecommendedUsers getRecommendationForUserUsingGeoShards(String userId) throws IOException {
         String routing = getShardsNumber(userId);
-        SearchResponse searchResponse = searchElasticsearch("userdata",userId,routing);
-        SearchHit hit = searchResponse.getHits().getHits()[0];
-        return objectMapper.readValue(hit.getSourceAsString(), RecommendedUsers.class);
+        SearchResponse searchResponse = searchElasticsearch("userdata", userId, routing);
+        SearchHit hit =null;
+        RecommendedUsers recommendedUsers=null;
+        if(searchResponse.getHits().getHits().length>0 && false){
+            hit = searchResponse.getHits().getHits()[0];
+            recommendedUsers = objectMapper.readValue(hit.getSourceAsString(), RecommendedUsers.class);
+            recommendedUsers.setId(userId);
+        }
+        //TODO: Incase of new user or user which moved from old location, needs to generate recommendation
+        else{
+            recommendedUsers = generateRecommendationForUser("userdata", userId, routing);
+        }
+
+        return recommendedUsers;
+    }
+
+    private RecommendedUsers generateRecommendationForUser(String index, String userId, String routing) throws IOException {
+        RecommendedUsers recommendedUsers = new RecommendedUsers();
+        UserProfile userProfile = profileRepo.findById(Long.valueOf(userId)).orElseThrow(()->new RuntimeException("User is not found"));
+        recommendedUsers.setId(userId);
+        recommendedUsers.setAge(userProfile.getAge());
+        recommendedUsers.setGlobal(userProfile.isGlobal()==true?"true":"false");
+        recommendedUsers.setPreferance(String.valueOf(userProfile.getPreferance()));
+        recommendedUsers.setHigher_range(userProfile.getHigherRange());
+        recommendedUsers.setLower_range(userProfile.getLowerRange());
+        recommendedUsers.setProfile_score(String.valueOf(userProfile.getProfileScore()));
+
+        List<Integer> similarUsers = new ArrayList<>();
+
+        SearchRequest searchRequest = new SearchRequest(index);
+        SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder();
+        searchSourceBuilder.sort(SortBuilders.fieldSort("profile_score").order(SortOrder.DESC).sortMode(SortMode.MAX));
+        searchSourceBuilder.size(100);
+        searchRequest.source(searchSourceBuilder);
+        SearchResponse searchResponse = elasticsearchClient.search(searchRequest, RequestOptions.DEFAULT);
+        SearchHits hits = searchResponse.getHits();
+        for(SearchHit hit:hits){
+            RecommendedUsers recommendedUsers1 = objectMapper.readValue(hit.getSourceAsString(), RecommendedUsers.class);
+            similarUsers.add(Integer.valueOf(recommendedUsers1.getId()));
+        }
+
+        recommendedUsers.setSimilar_user(similarUsers);
+        return recommendedUsers;
+
     }
 
     public SearchResponse searchElasticsearch(String index, String id, String preference) throws IOException {
@@ -72,6 +112,24 @@ public class RecommendationService {
     }
 
     public String getShardsNumber(String userId){
+        UserProfile userProfile = profileRepo.findById(Long.valueOf(userId)).orElseThrow(()->new RuntimeException("User is not found"));
+        String userLocation = userProfile.getLocation();
+        double latitude = Double.parseDouble(userLocation.split(" ")[0].replace("lat:",""));
+        double longitude = Double.parseDouble(userLocation.split(" ")[1].replace("long:",""));
+
+        String routing = locationMapper(latitude,longitude);
+        return routing;
+
+    }
+
+    public boolean isWholeNumber(double num) {
+        return num == Math.floor(num);
+    }
+    private String locationMapper(double latitude, double longitude) {
+        int row=isWholeNumber(latitude)?(int) latitude-1-20:(int) latitude-20;
+        int col=isWholeNumber(longitude)?(int) longitude-1-20:(int) longitude-20;
+
+        return String.valueOf(row*(Constants.longitude.length-1)+col+1);
 
     }
 
