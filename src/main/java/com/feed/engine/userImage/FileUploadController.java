@@ -24,7 +24,7 @@ public class FileUploadController {
         return new ResponseEntity<>(userImage, HttpStatus.OK);
     }
 
-    @GetMapping("")
+    @GetMapping
     public ResponseEntity<String> getImageURI( @RequestParam(value = "Id") String Id, @RequestParam("imageOrderId") String imageOrderId) {
         return new ResponseEntity<>(s3service.getFileURI(Id,imageOrderId),HttpStatus.OK);
     }

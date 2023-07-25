@@ -16,7 +16,7 @@ public class SwipeController {
 
     private final SwipeService swipeService;
 
-    @PostMapping("")
+    @PostMapping
     ResponseEntity<Swipe> swipeDetails(@RequestBody Swipe swipe){
         swipeService.saveSwipeDetails(swipe);
         return new ResponseEntity<>(swipe, HttpStatus.OK);
